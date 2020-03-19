@@ -16,7 +16,7 @@ PROGRAM_MODE = 1
 #### SET PATH AND FILENAME ####
 ###############################
 pathFolder = "IOTDB/"
-fileName = "dtest.csv"
+fileName = "utf16.csv"
 
 #### SET PATH FOLDER ####
 #########################
@@ -39,7 +39,6 @@ def connection():
                                       host = "18.139.21.250",
                                       port = "5432",
                                       database = "iotdb_final")
-        print("PostgreSQL, Connection is connected");
         return connection
     except (Exception, psycopg2.Error) as error :
         print ("PostgreSQL, Error while connecting :", str(error).strip())
@@ -118,31 +117,37 @@ def ftpMoveFile(ftp, source, destination):
         print("FTP MOVE FILE : \""+ source + "\" " + str(e).strip())
         return False
 
-def LOG(c, l, fName, AStatus):
+def INS_LOGID(fName, AStatus):
+    c = connection()
     t = CExecute(c, "INSERT INTO process (process_name, active_status, created_by) VALUES (%s, %s, %s)  RETURNING id;", (str(fName).strip(), str(AStatus).strip(), str(CB).strip()), True);
-    t = t[0][0]
-    print("LOG : INSERT PROCESS ID : " + str(t))
-    for r in l:
-        PResult = str(r[0]).strip() + " : "+ str(r[5]).strip()
-        print("LOG : PROCESS LOG > " + str(PResult))
-        CExecute(c, "INSERT INTO process_log (process_id, start_date_time, end_date_time, is_success, process_result, created_by) VALUES (%s, %s, %s, %s, %s, %s)  RETURNING id;", (str(t).strip(), str(r[3]).strip(), str(r[4]).strip(), str(r[2]).strip(), str(PResult).strip(), str(CB).strip()), True);
+    c.commit()
+    print("LOG : INSERT PROCESS ID : " + str(t[0][0]))
+    return t[0][0]
 
-def fileExists(n):
+def LOG(r, t):
+    con = connection()
+    try:
+        CExecute(con, "INSERT INTO process_log (process_id, start_date_time, end_date_time, is_success, process_result, created_by) VALUES (%s, %s, %s, %s, %s, %s)  RETURNING id;", (str(t).strip(), str(r[3]).strip(), str(r[4]).strip(), str(r[2]).strip(), str(r[0]).strip(), str(CB).strip()), True);
+        #print("LOG : PROCESS LOG > " + str(r[0]).strip() + ", " + str(r[2]).strip())
+    except Exception as error:
+        con.rollback()
+        print("LOG : Error " + str(error).strip())
+    finally:
+        con.commit()
+
+def fileExists(n, logid):
     PStart = TimeStamp()
     try:
         fexist = os.path.isfile(n)
         if fexist:
-            PResult = "File : \"" + n + "\" is exist"            
-            ISSuccess = True
-            AStatus = "A"
+            PResult = "File : \"" + n + "\" is exist"
         else:
             PResult = "File : \"" + n + "\" is not exist"
-            ISSuccess = False
-            AStatus = "A"
+            LOG(["File Exist", "A", False, PStart, TimeStamp(), ""], logid)
     except Exception as error:
         PResult = "File : " + n + str(error).strip()
+        ADDLOG(["File Exist", "A", False, PStart, TimeStamp(), ""], logid)
     finally:
-        ADDLOG(["File Exist", AStatus, ISSuccess, PStart, TimeStamp(), PResult])
         print ("FILE EXIST,", PResult)
         return fexist
 
@@ -185,9 +190,13 @@ def CExecute(c,sth,value, t = None):
         c.rollback()
         print("PostgreSQL, Transection Rollback");
         return [False, str(error).strip()]
+    finally:
+        pass
+    
 
-def IS_UTF8(fname):
+def IS_UTF8(fname, logid):
     PStart = TimeStamp()
+    ISSuccess = False
     try:
         f = open(fname,"rb")
         r = f.read()
@@ -196,43 +205,37 @@ def IS_UTF8(fname):
             #File is UTF-8 or UTF-8-SIG
             PResult = "File : \"" + fname + "\" format is " + result['encoding']
             ISSuccess = True
-            AStatus = "A"
         else:
             #File is not UTF-8 or UTF-8-SIG
             PResult = "File : \"" + fname + "\" formar is not UTF-8 or UTF-8-SIG"
-            ISSuccess = False
-            AStatus = "A"
+            LOG(["File not utf-8 format", "A", ISSuccess, PStart, TimeStamp(), ""], logid)
     except Exception as error:
         #Error cannot open file
         PResult = "File : \"" + fname +"\" " + str(error).strip()
-        ISSuccess = False
-        AStatus = "A"
+        #LOG([str(error).strip(), "A", ISSuccess, PStart, TimeStamp(), ""], logid)
     finally:
         f.close()
-        ADDLOG(["File Format", AStatus, ISSuccess, PStart, TimeStamp(), PResult])
-        print ("FILE FORMAT," , PResult)
+        print (PResult)
         return ISSuccess
         
-def HAS_DATA(fname):
+def HAS_DATA(fname, logid):
     PStart = TimeStamp()
+    ISSuccess = False
     try:
-        df = pd.read_csv(fname)
-        if not df.empty:
-            PResult = "File : \"" + fname +"\" Data is exists"
-            ISSuccess = True
-            AStatus = "A"
-        else:
-            PResult = "File : \"" + fname +"\" Data is not exists"
-            ISSuccess = False
-            AStatus = "A"
-            
+        with open(fname, encoding = "UTF-8-SIG") as f:
+            readCSV = csv.reader(f, delimiter='|')
+            row_count = sum(1 for row in readCSV)
+            if row_count > 0:
+                PResult = "File : \"" + fname +"\" Data is exists"
+                ISSuccess = True
+            else:
+                PResult = "File : \"" + fname +"\" Data is not exists"
+                LOG(["No data in file", "A", ISSuccess, PStart, TimeStamp(), ""], logid)
     except Exception as error:
-        PResult = "File : \"" + fname +"\" " + str(error).strip()
-        ISSuccess = False
-        AStatus = "A"
+        PResult = "File : \"" + fname +"\" No data in file"
+        LOG(["No data in file", "A", ISSuccess, PStart, TimeStamp(), ""], logid)
     finally:
-        ADDLOG(["Has Data", AStatus, ISSuccess, PStart, TimeStamp(), PResult])
-        print ("HAS DATA," , PResult)
+        print ("HAS_DATA > " + PResult)
         return ISSuccess
 
 def getTableName(n):
@@ -247,36 +250,14 @@ def getTableName(n):
 
 def getSchema(c, n):
     tbn = getTableName(n)
-    sth = "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name = '"+tbn+"';"
+    sth = "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name = '"+tbn+"' and column_name != 'created_date_time' and column_name != 'created_by';"
+    #sth = "SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name = '"+tbn+"';"
     return CExecute(c, sth, None, True)
 
 def getHeaderCSVFile(fn):
     with open(fn, encoding = "UTF-8-SIG") as f:
         d_reader = csv.DictReader(f)
         return d_reader.fieldnames
-    
-def CHK_COLUMN(c, fname):
-    PStart = TimeStamp()
-    try:
-        cdb = len(getSchema(c, 1))
-        f = getHeaderCSVFile(fname)
-        cf = len(f)
-        if cf == cdb:
-            PResult = "File : \"" + fname +"\" has " + str(cf) + "columns equal in the database"
-            ISSuccess = True
-            AStatus = "A"
-        else:
-            PResult = "File : \"" + fname +"\" has " + str(cf) + " columns not equal in the database : " + str(f)
-            ISSuccess = False
-            AStatus = "A"
-    except Exception as error:
-        PResult = "File : \"" + fname +"\" has some error : " + str(error).strip()
-        ISSuccess = False
-        AStatus = "A"
-    finally:
-        ADDLOG(["Check Column", AStatus, ISSuccess, PStart, TimeStamp(), PResult])
-        print ("CHK COLUMN," , PResult)
-        return ISSuccess
 
 def CLEAR_INTERFACE(c):
     if PROGRAM_MODE == 1:
@@ -298,7 +279,30 @@ def GET_STH_SELECT(chkcode):
     if chkcode:
         if PROGRAM_MODE == 1:
             return "SELECT COUNT(*) FROM vendor_business_type WHERE business_type_code = %s;"
-        
+
+def CHK_COLUMN(c, fname, logid):
+    PStart = TimeStamp()
+    try:
+        tmpchk = True
+        cdb = len(getSchema(c, 1))
+        with open(fname, encoding = "UTF-8-SIG") as csvfile:
+            readCSV = csv.reader(csvfile, delimiter='|')
+            i = 0
+            for row in readCSV:
+                i = i + 1
+                if len(row) != cdb:
+                    tmpchk = False
+                    print ("CHK_COLUMN > " + "File : \"" + fname +"\", ROW : \"" + str(i) +"\" has " + str(len(row)) + " columns not equal in the database")
+        if tmpchk:
+            print ("CHK_COLUMN > " + "File : \"" + fname +"\" all row has " + str(cdb) + " columns equal in the database")
+        else:
+            LOG(["Check Column", "A", tmpchk, PStart, TimeStamp(), ""], logid)
+    except Exception as error:
+        print ("CHK_COLUMN > " + "File : \"" + fname +"\" has some error : " + str(error).strip())
+        LOG(["Data not match table column", AStatus, False, PStart, TimeStamp(), ""], logid)
+    finally:
+        return tmpchk
+
 def createLogFile(pFile, r, ftp, ftpPath, ftpFileName):
     try :
         with open(pFile, 'w', newline='') as myfile:
@@ -310,50 +314,47 @@ def createLogFile(pFile, r, ftp, ftpPath, ftpFileName):
             for v in r:
                 i = i + 1
                 if not v[0] == True:
-                    wr.writerow([i] + [v[1]] + [list(v[2].items())])
+                    wr.writerow([i] + [v[1]] + [list(v[2])])
                     
         with open(pFile, 'rb') as myfile:
-            print('STOR ' + ftpFileName)
             ftp.cwd(ftpPath)
             ftp.storbinary('STOR ' + ftpFileName, myfile)
             ftp.cwd("/")
-            print("UPLOAD LOG FILES ERROR TO : " + ftpPath + ftpFileName + " successed")
+            print("createLogFile > UPLOAD LOG FILES ERROR TO : " + ftpPath + ftpFileName + " successed")
         return True
     except Exception as error:
-        print("CREATE LOG FILES ERROR : " + str(error).strip())
+        print("createLogFile > ERROR : " + str(error).strip())
         return False
 
-def CHK_REQUIRE(pFile):
+def CHK_REQUIRE(pFile, logid, ftp):
+    PStart = TimeStamp()
+    c = True
+    t = []
     try:
-        c = True
-        t = []
         with open(pFile, encoding = "UTF-8-SIG") as f:
-            for r in csv.DictReader(f):
+            for r in csv.reader(f, delimiter='|'):
                 if PROGRAM_MODE == 1:
-                    if (not r['business_type_name'] == None) and (not r['business_type_code'] == None) and (not r['business_type_name'] == "") and (not r['business_type_code'] == ""):
+                    if (not r[0] == None) and (not r[1] == None) and (not r[0] == "") and (not r[1] == ""):
                         t.append([True, "", r])
                     else:
-                        if (r['business_type_name'] == None) or (r['business_type_name'] == "") and (r['business_type_code'] == None) or (r['business_type_code'] == ""):
-                            e = "business_type_name and business_type_code is None"
-                        elif (r['business_type_name'] == None) or (r['business_type_name'] == ""):
-                            e = "business_type_name is None"
-                        else:
-                            e = "business_type_code is None"
                         c = False
-                        t.append([False, e, r])
+                        t.append([False, "Check require failed", r])
     except Exception as error :
-        print("CHECK REQUIRE : " + str(error).strip())
+        print("CHECK_REQUIRE : " + str(error).strip())
     finally :
         if c == True:
+            print("CHECK_REQUIRE : Successed")
             return True
         else:
+            print("CHECK_REQUIRE : Failed")
             localFile = pathFolderTemp + getNewFileName(fileName, getDate(2), 5)
             ftpFile = pathFolderFail
             createLogFile(localFile, t, ftp, ftpFile, getNewFileName(fileName, getDate(2), 6))
             removeFile(localFile)
+            LOG(["Reqiure data failed", "A", False, PStart, TimeStamp(), ""], logid)
             return False
 
-def INSERT_INTERFACE(c, pFile, ftp):
+def INSERT_INTERFACE(c, pFile, ftp, logid):
     PStart = TimeStamp()
     print("INSERT INTERFACE : Transection Created")
     if PROGRAM_MODE == 1:
@@ -361,59 +362,61 @@ def INSERT_INTERFACE(c, pFile, ftp):
             chk = True
             t = []
             with open(pFile, encoding = "UTF-8-SIG") as f:
-                for r in csv.DictReader(f):
-                    print("INSERT INTERFACE : Insert code \"" + str(r['business_type_code']).strip() + "\" to interface table")
-                    v = CExecute(c, GET_STH_INSERT_INTERFACE(), [str(r['business_type_code']).strip(), str(r['business_type_name']).strip(), str(PStart).strip(), str(CB).strip()], False)
+                for r in csv.reader(f, delimiter='|'):
+                    print("INSERT INTERFACE : Insert code \"" + str(r[0]).strip() + "\" to interface table")
+                    v = CExecute(c, GET_STH_INSERT_INTERFACE(), [str(r[0]).strip(), str(r[1]).strip(), str(PStart).strip(), str(CB).strip()], False)
                     if v[0] == False:
                         chk = False
                         t.append([False, v[1], r])
         except Exception as error :
+            chk = False
             print("INSERT INTERFACE : " + str(error).strip())
         finally :
             if chk == True:
                 print("INSERT INTERFACE : Successed")
-                ADDLOG(["Insert Interface", "A", chk, PStart, TimeStamp(), "Insert Interface Successed"])
-                return True
             else:
                 localFile = pathFolderTemp + getNewFileName(fileName, getDate(2), 1)
                 ftpFile = pathFolderFail
                 createLogFile(localFile, t, ftp, ftpFile, getNewFileName(fileName, getDate(2), 6))
                 removeFile(localFile)
-                ADDLOG(["Insert Interface", "A", chk, PStart, TimeStamp(), "Insert Interface Falied Transection rollback"])
-                return False
+            return chk
+            LOG(["Insert Interface", "A", chk, PStart, TimeStamp(), ""], logid)
 
-def INSERT_NORMAL(c, pFile):
+def INSERT_NORMAL(c, pFile, logid):
     PStart = TimeStamp()
     print("INSERT NORMAL : Transection Created")
     if PROGRAM_MODE == 1:
         try:
             with open(pFile, encoding = "UTF-8-SIG") as f:
-                for r in csv.DictReader(f):
-                    v = CExecute(c, GET_STH_SELECT(True), [str(r['business_type_code']).strip()], True)
+                for r in csv.reader(f, delimiter='|'):
+                    v = CExecute(c, GET_STH_SELECT(True), [str(r[0]).strip()], True)
                     if(v[0][0] == 1):
-                        print("INSERT NORMAL : Code \"" + str(r['business_type_code']).strip() + "\" is duplicate, Update where code = \"" + str(r['business_type_code']).strip() + "\" to normal table")
-                        CExecute(c, GET_STH_UPDATE(), [str(r['business_type_name']).strip(), str(PStart).strip(), str(CB).strip(), str(ACT).strip(), str(r['business_type_code']).strip()], False)
+                        print("INSERT NORMAL : Code \"" + str(r[0]).strip() + "\" is duplicate, Update where code = \"" + str(r[0]).strip() + "\" to normal table")
+                        CExecute(c, GET_STH_UPDATE(), [str(r[1]).strip(), str(PStart).strip(), str(CB).strip(), str(ACT).strip(), str(r[0]).strip()], False)
                     else:
-                        print("INSERT NORMAL : Insert code \"" + str(r['business_type_name']).strip() + "\" to normal table")
-                        CExecute(c, GET_STH_INSERT_NORMAL(), [str(r['business_type_code']).strip(), str(r['business_type_name']).strip(), str(PStart).strip(), str(CB).strip(), str(ACT).strip()], False)
+                        print("INSERT NORMAL : Insert code \"" + str(r[0]).strip() + "\" to normal table")
+                        CExecute(c, GET_STH_INSERT_NORMAL(), [str(r[0]).strip(), str(r[1]).strip(), str(PStart).strip(), str(CB).strip(), str(ACT).strip()], False)
         except Exception as error :
             print("INSERT NORMAL : Error > " + str(error).strip())
-            ADDLOG(["Insert Normal", "A", False, PStart, TimeStamp(), "Insert Normal Falied Transection rollback"])
+            LOG(["Insert Normal", "A", False, PStart, TimeStamp(), ""], logid)
         finally :
             print("INSERT NORMAL : Successed")
-            ADDLOG(["Insert Normal", "A", True, PStart, TimeStamp(), "Insert Normal Successed Transection commit"])
+            LOG(["Insert Normal", "A", True, PStart, TimeStamp(), ""], logid)
 
-def getFile(ftp, fName, lName):
+def getFile(ftp, fName, lName, logid):
+    PStart = TimeStamp()
     try:
         localfile = open(lName, 'wb')
         ftp.retrbinary('RETR ' + fName, localfile.write, 1024)
         localfile.close()
         return True
     except Exception as error:
+        LOG(["File not found", "A", False, PStart, TimeStamp(), ""], logid)
         print("Get File Error : " + str(error).strip())
         return False
 
 def Process():
+    print("PostgreSQL, Connection is connected");
     c = connection()
     ftp = ftpconnection()
     PROCESSPASSED = False
@@ -421,16 +424,17 @@ def Process():
     pathFile = pathFolderTemp + tmp
     ftpFile = pathFolder + fileName
     fn = ""
+    LOGID = INS_LOGID(tmp, "A")
     try:
         if(ftpPathExists(ftp, pathFolderSuccess) and ftpPathExists(ftp, pathFolderFail) and localPathExists(pathFolderTemp)):
-            if(getFile(ftp, ftpFile, pathFile)):
-                if(fileExists(pathFile)):
-                    if(IS_UTF8(pathFile)):
-                        if HAS_DATA(pathFile):
-                            if CHK_COLUMN(c, pathFile):
-                                if CHK_REQUIRE(pathFile):
-                                    if INSERT_INTERFACE(c, pathFile, ftp):
-                                        INSERT_NORMAL(c, pathFile)
+            if(getFile(ftp, ftpFile, pathFile, LOGID)):
+                if(fileExists(pathFile, LOGID)):
+                    if(IS_UTF8(pathFile, LOGID)):
+                        if HAS_DATA(pathFile, LOGID):
+                            if CHK_COLUMN(c, pathFile, LOGID):
+                                if CHK_REQUIRE(pathFile, LOGID, ftp):
+                                    if INSERT_INTERFACE(c, pathFile, ftp, LOGID):
+                                        INSERT_NORMAL(c, pathFile, LOGID)
                                         CLEAR_INTERFACE(c)
                                         PROCESSPASSED = True
                                         fn = pathFolderSuccess + getNewFileName(fileName, getDate(2), 0)
@@ -449,19 +453,19 @@ def Process():
                                     print("MOVED FILE \"" + fileName + "\" to : " + fn)
                             else:
                                 #COLUMN IS DIFFERENCED
-                                fn = pathFolderFail + getNewFileName(fileName, getDate(2), 4)
+                                fn = pathFolderFail + getNewFileName(fileName, getDate(2), 0)
                                 print("MOVED FILE \"" + fileName + "\" to : " + fn)
-                                ftpMoveFile(ftp, ftpFile, pathFolderFail + fn)
+                                ftpMoveFile(ftp, ftpFile, fn)
                         else:
                             #DATA IS NOT EXIST
-                            fn = pathFolderFail + getNewFileName(fileName, getDate(2), 2)
+                            fn = pathFolderFail + getNewFileName(fileName, getDate(2), 0)
                             print("MOVE FILE \"" + fileName + "\" to : " + fn)
                             ftpMoveFile(ftp, ftpFile, fn)
                     else:
                         #FILE IS NOT UTF8
-                        fn = pathFolderFail + getNewFileName(fileName, getDate(2), 3)
+                        fn = pathFolderFail + getNewFileName(fileName, getDate(2), 0)
                         print("MOVE FILE \"" + fileName + "\" to : " + fn)
-                        ftpMoveFile(ftpFile, fn)
+                        ftpMoveFile(ftp, ftpFile, fn)
             else:
                 print("Cannot download file form ftp server.")
     except (Exception) as error :
@@ -469,22 +473,11 @@ def Process():
     finally:
         if c is not None:
             if PROCESSPASSED:
-                if len(tmpLogs) > 0:
-                    print("PostgreSQL, Create Transection Logs");
-                    LOG(c, tmpLogs, fn, "A")
                 c.commit()
                 print("PostgreSQL, All Transection Commit");
             else:
                 c.rollback()
-                print("PostgreSQL, Transection Rollback");
-                if len(tmpLogs) > 0:
-                    print("PostgreSQL, Create Transection Logs");
-                    if(LOG(c, tmpLogs, fn, "A")):
-                        c.commit()
-                        print("PostgreSQL, Transection Logs Commit");
-                    else:
-                        c.rollback()
-                        print("PostgreSQL, Transection Logs Rollback");
+                print("PostgreSQL, All Transection Rollback");
             removeFile(pathFile)
             c.close()
             print("PostgreSQL, Connection is closed");
