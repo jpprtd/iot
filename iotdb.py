@@ -16,7 +16,7 @@ PROGRAM_MODE = 1
 #### SET PATH AND FILENAME ####
 ###############################
 pathFolder = "IOTDB/"
-fileName = "dtesterror.csv"
+fileName = "dtest.csv"
 
 #### SET PATH FOLDER ####
 #########################
@@ -34,9 +34,9 @@ ACT = "A"
 
 def connection():
     try:
-        connection = psycopg2.connect(user = "postgres",
-                                      password = "1234",
-                                      host = "127.0.0.1",
+        connection = psycopg2.connect(user = "admin",
+                                      password = "admingps",
+                                      host = "18.139.21.250",
                                       port = "5432",
                                       database = "iotdb_final")
         print("PostgreSQL, Connection is connected");
@@ -469,10 +469,10 @@ def Process():
     finally:
         if c is not None:
             if PROCESSPASSED:
-                c.commit()
                 if len(tmpLogs) > 0:
                     print("PostgreSQL, Create Transection Logs");
                     LOG(c, tmpLogs, fn, "A")
+                c.commit()
                 print("PostgreSQL, All Transection Commit");
             else:
                 c.rollback()
@@ -480,8 +480,10 @@ def Process():
                 if len(tmpLogs) > 0:
                     print("PostgreSQL, Create Transection Logs");
                     if(LOG(c, tmpLogs, fn, "A")):
+                        c.commit()
                         print("PostgreSQL, Transection Logs Commit");
                     else:
+                        c.rollback()
                         print("PostgreSQL, Transection Logs Rollback");
             removeFile(pathFile)
             c.close()
